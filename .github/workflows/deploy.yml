@@ -1,0 +1,87 @@
+name: Deploy to Dev
+
+on:
+  workflow_call:
+    secrets:
+      CRYPTO_KEY: 
+        required: true
+      MULE_CLIENT_ID: 
+        required: true
+      MULE_CLIENT_SECRET: 
+        required: true
+      ANYPOINT_CLIENT_ID: 
+        required: true
+      ANYPOINT_CLIENT_SECRET: 
+        required: true
+      GH_PAT: 
+        required: true
+    inputs:
+      mule-env: 
+        description: The MuleSoft environment that the deployment will be deployed to
+        required: true
+        type: string
+      release-branch: 
+        description: The Release Branch Name that will be created when a deploy to staging environment is done
+        required: true
+        type: string
+      short-sha:
+        description: The short sha for the commit that initiated this workflow. This will be used to create the release branch
+        required: true
+        type: string
+
+        
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    # Create Release branch if environment is UAT and branch is not a release branch
+    if: ${{ inputs.mule-env == 'UAT' && !contains( GITHUB.ref_name, 'release-' ) }}
+    environment: ${{ inputs.mule-env }}
+    steps:
+
+    - name: Checkout Current Develop Branch
+      uses: actions/checkout@v3
+      with:
+        ref: 'develop'
+        token: ${{ secrets.GH_PAT }}
+        fetch-depth: 0
+    
+    - name: Create release branch and ammend last commit to include [skip ci]
+      run: |
+        git config --global user.name "Github Actions Bot"
+        git config --global user.email "<>"
+        git --version
+        git checkout develop
+        git pull
+        OLD_MSG=$(git log --format=%B -n1)
+        git commit --amend -m"$OLD_MSG" -m" [skip ci] " 
+        git checkout -b ${{ inputs.release-branch }}
+        git push -u origin ${{ inputs.release-branch }}
+
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.mule-env }}
+    steps:
+    - uses: actions/download-artifact@v3
+      with:
+        name: app-artifacts
+    - name: Set up JDK 8
+      uses: actions/setup-java@v3
+      with:
+        java-version: '8'
+        distribution: 'temurin'
+        cache: maven
+    
+    - name: Get Jar Full File Name
+      run: |
+        echo "FILE_PATH=$(ls ./target/*.jar)" >> $GITHUB_OUTPUT
+      id: file_name
+
+    - name: Deploy To specified environment based on profile
+      run: |
+        mvn mule:deploy -e -P ${{ inputs.mule-env }} \
+        -Dmule.key=${{ secrets.CRYPTO_KEY }} \
+        -DartifactPath=${{ steps.file_name.outputs.FILE_PATH }} \
+        -DconnectedAppClientId=${{ secrets.MULE_CLIENT_ID }} \
+        -DconnectedAppClientSecret=${{ secrets.MULE_CLIENT_SECRET }} \
+        -DanypointPlatformClientId=${{ secrets.ANYPOINT_CLIENT_ID }} \
+        -DanypointPlatformClientSecret=${{ secrets.ANYPOINT_CLIENT_SECRET }} 
